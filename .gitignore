@@ -12,3 +12,6 @@ logs/
 .idea/
 Thumbs.db
 Desktop.ini
+
+# one-off refactor backups
+*.before-split

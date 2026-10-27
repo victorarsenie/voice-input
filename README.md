@@ -134,17 +134,18 @@ wheels (~1.9 GB on disk, listed in requirements.txt).
 
 ## Start it like an app
 
-`install-shortcuts.ps1` creates three shortcuts (run it once):
+`install-shortcuts.ps1` creates a single **Voice** shortcut on the Desktop and in
+the Start menu:
 
-| shortcut | what it does |
+| double-click | result |
 |---|---|
-| **Voice dictation** (Desktop + Start Menu) | starts the listener hidden; safe to double-click twice — a second copy exits on the single-instance mutex |
-| **Voice toggle** (Desktop) | starts it if stopped, stops it if running |
+| first | starts the listener hidden (no console) |
+| again | stops it |
 
-The icon is currently Python's; drop your own `.ico` in the folder and point
-`IconLocation` at it if you want a mic glyph. There is no `.exe`: it is a Python
-program started through `wscript.exe` + `start-voice.vbs`, which is why it has no
-console window and needs no installer.
+The installer also removes the older split `Voice dictation` / `Voice toggle`
+shortcuts, so there is exactly one entry point. It is not an `.exe`: it runs
+`voice-ctl.ps1 toggle` through `wscript`-style hidden PowerShell, which is why
+there is no installer and no console window.
 
 ## Feedback while you talk
 

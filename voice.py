@@ -572,7 +572,7 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
         finally:
             _INJECTING.clear()
         _compose_state["has_text"] = False
-        indicator.post("done", "✓ sent")
+        indicator.post("done", "âœ“ sent")
         log("compose: sent")
         return
 
@@ -651,7 +651,7 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
         _compose_state["has_text"] = True
         mirror = _compose_state["text"].rstrip()
         _compose_state["text"] = (mirror + " " + payload.strip()) if mirror else payload.strip()
-        indicator.post("done", "✓ %s" % style)
+        indicator.post("done", "âœ“ %s" % style)
         log("compose: formatted %s" % style)
         return
 
@@ -668,7 +668,7 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
             _INJECTING.clear()
         _compose_state["has_text"] = True
         _compose_state["text"] = _compose_state["text"].rstrip() + char
-        indicator.post("done", "✓ %s" % char)
+        indicator.post("done", "âœ“ %s" % char)
         log("compose: inserted punctuation %r" % char)
         return
 
@@ -724,7 +724,7 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
         finally:
             _INJECTING.clear()
         _compose_state["text"] = _compose_state["text"].rstrip() + "\n\n"
-        indicator.post("done", "¶")
+        indicator.post("done", "Â¶")
         log("compose: new paragraph")
         return
 
@@ -744,7 +744,7 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
         _compose_state["has_text"] = True
         mirror = _compose_state["text"].rstrip()
         _compose_state["text"] = (mirror + " " + payload.strip()) if mirror else payload.strip()
-    indicator.post("done", "✓ added")
+    indicator.post("done", "âœ“ added")
     log("compose: added %d chars" % len(payload))
 
 
@@ -889,6 +889,20 @@ def _consume_all(normalised: str) -> list[str] | None:
     return actions or None
 
 
+def _leading_command(text: str) -> tuple[str, str] | None:
+    """A multi-word command phrase at the start of a longer utterance.
+
+    Single-word phrases are excluded on purpose: "send me the file" and
+    "copy the path" are prose, not commands.
+    """
+    ordered = sorted((p for p in _PHRASES if len(p.split()) >= 2), key=len, reverse=True)
+    for phrase in ordered:
+        match = re.match(r"^\s*" + re.escape(phrase) + r"\b[\s,.!?]*", text, re.IGNORECASE)
+        if match:
+            return _PHRASES[phrase], text[match.end():].strip()
+    return None
+
+
 def _trailing_command(text: str) -> tuple[str, str] | None:
     """A command phrase at the very end of a longer utterance."""
     ordered = sorted(_PHRASES, key=len, reverse=True)
@@ -949,9 +963,16 @@ def plan_transcript(text: str) -> list[tuple[str, str]]:
     if buffer:
         joined = " ".join(buffer)
         edit = parse_edit(joined)
-        trailing = None if edit else _trailing_command(joined)
+        leading = None if edit else _leading_command(joined)
+        trailing = None if (edit or leading) else _trailing_command(joined)
         if edit:
             steps.append(edit)
+        elif leading:
+            action, rest = leading
+            if not steps or steps[-1][0] != action:
+                steps.append((action, ""))
+            if rest:
+                steps.append(("add", rest))
         elif trailing:
             head, action = trailing
             if head:
@@ -1037,7 +1058,7 @@ def speak_text(text: str, indicator: "Indicator") -> None:
         except Exception as exc:
             log("tts failed: %s" % exc)
 
-    indicator.post("done", "♪ speaking")
+    indicator.post("done", "â™ª speaking")
     threading.Thread(target=run, daemon=True).start()
     log("tts: speaking %d chars" % len(text))
 
@@ -1053,21 +1074,30 @@ def speak_last_reply(indicator: "Indicator") -> None:
 
 
 def deliver(text: str, mode: str, indicator: "Indicator") -> None:
-    """Route a transcript: submit it, or type it into the focused composer."""
+    """Route a transcript: speak, submit it, or type it into the focused composer."""
+    steps = plan_transcript(text)
+    if not steps:
+        return
+
+    for action, _ in steps:
+        if action == "speak":
+            speak_last_reply(indicator)
+    steps = [step for step in steps if step[0] != "speak"]
+    if not steps:
+        return
+
     if (mode or "submit").lower() == "compose":
-        steps = plan_transcript(text)
-        if not steps:
-            return
         for action, payload in steps:
-            if action == "speak":
-                speak_last_reply(indicator)
-                continue
             compose(payload, action, indicator)
         if all(action == "add" for action, _ in steps):
-            indicator.post("done", "✓ added")
+            indicator.post("done", "âœ“ added")
         return
-    submit(text, resolve_session())
-    indicator.post("done", "✓ sent")
+
+    spoken = " ".join(payload for action, payload in steps if action == "add").strip()
+    if not spoken:
+        return
+    submit(spoken, resolve_session())
+    indicator.post("done", "âœ“ sent")
 
 
 def submit(text: str, session_id: str) -> None:
@@ -1131,7 +1161,7 @@ def main() -> int:
 
     log("starting: hold=%r toggle=%r model=%r mic=%r" % (
         _cfg.get("hold_key") or _cfg.get("key"),
-        _cfg.get("toggle_key") or "right shift",
+        _cfg.get("toggle_key") or "scroll lock",
         _cfg.get("model"),
         _cfg.get("mic_device"),
     ))
@@ -1150,7 +1180,7 @@ def main() -> int:
     hold_mode = (_cfg.get("mode") or "submit").lower()
     toggle_mode = (_cfg.get("toggle_mode") or "compose").lower()
     hold_key = (_cfg.get("hold_key") or _cfg.get("key") or "right ctrl").lower()
-    toggle_key = (_cfg.get("toggle_key") or "right shift").lower()
+    toggle_key = (_cfg.get("toggle_key") or "scroll lock").lower()
     state = {"held": False, "busy": False, "live": False, "toggle_down": False}
     guard = threading.Lock()
 
@@ -1180,14 +1210,14 @@ def main() -> int:
         deliver(text, mode, indicator)
 
     def on_segment(audio: np.ndarray) -> None:
-        indicator.post("stt", "… transcribing")
+        indicator.post("stt", "â€¦ transcribing")
         try:
             handle_audio(audio, toggle_mode, "live")
         except Exception as exc:
             indicator.post("warn", "error")
             log("live error: %s" % exc)
         if state["live"]:
-            indicator.post("live", "● live — right shift to stop")
+            indicator.post("live", "â— live â€” %s to stop" % toggle_key)
 
     def on_partial(audio: np.ndarray) -> None:
         if not state["live"]:
@@ -1198,7 +1228,7 @@ def main() -> int:
             log("live caption failed: %s" % exc)
             return
         if partial:
-            indicator.post("stt", "… " + partial[-48:])
+            indicator.post("stt", "â€¦ " + partial[-48:])
 
     live = LiveListener(
         rate,
@@ -1223,7 +1253,7 @@ def main() -> int:
         if live.start(device):
             state["live"] = True
             _compose_state["has_text"] = True  # assume the box may already hold text
-            indicator.post("live", "● live — scroll lock to stop")
+            indicator.post("live", "â— live â€” %s to stop" % toggle_key)
             beep(880, 40)
             log("live: listening on %s" % sd.query_devices(device)["name"])
 
@@ -1235,7 +1265,7 @@ def main() -> int:
         device = pick_device(_cfg.get("mic_device"))
         state["device"] = sd.query_devices(device)["name"]
         if recorder.start(device):
-            indicator.post("rec", "● recording")
+            indicator.post("rec", "â— recording")
             beep(880, 40)
             log("recording on %s" % state["device"])
 
@@ -1253,7 +1283,7 @@ def main() -> int:
             with guard:
                 state["busy"] = False
             return
-        indicator.post("stt", "… transcribing")
+        indicator.post("stt", "â€¦ transcribing")
         beep(600, 30)
         try:
             handle_audio(audio, hold_mode, "hold")

@@ -6,7 +6,7 @@ the implementation note is `knowledge/projects/voice-input/project.md` in the
 memory repo.
 
 Built so far: local faster-whisper `base` int8 on CPU, hold **right ctrl** to
-record and submit, tap **right shift** for live dictation that types each
+record and submit, tap **scroll lock** for live dictation that types each
 pause-delimited phrase into the composer, and spoken commands (`send prompt`,
 `delete prompt`, `remove the last N words`, `remove the last sentence`,
 `new line`). Not built: Piper TTS, sentence chunking, wake word, interrupt,

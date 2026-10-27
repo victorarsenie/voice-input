@@ -23,7 +23,27 @@ from pathlib import Path
 import numpy as np
 import sounddevice as sd
 import keyboard
-from faster_whisper import WhisperModel
+
+
+def _register_cuda_dlls() -> None:
+    """Make pip's cuBLAS/cuDNN DLLs findable by ctranslate2.
+
+    The NVIDIA wheels drop their DLLs inside site-packages and nothing adds them
+    to the search path, so CUDA silently falls back to CPU without this.
+    """
+    base = Path(sys.prefix) / "Lib" / "site-packages" / "nvidia"
+    for sub in ("cublas", "cudnn"):
+        folder = base / sub / "bin"
+        if folder.is_dir():
+            try:
+                os.add_dll_directory(str(folder))
+            except Exception:
+                pass
+            os.environ["PATH"] = str(folder) + os.pathsep + os.environ.get("PATH", "")
+
+
+_register_cuda_dlls()
+from faster_whisper import WhisperModel  # noqa: E402  (needs the DLL paths first)
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "voice.json"
@@ -49,6 +69,15 @@ def load_config() -> dict:
         return json.load(fh)
 
 
+def _resample(audio: np.ndarray, source: int, target: int) -> np.ndarray:
+    if source == target or audio.size == 0:
+        return audio
+    count = int(round(audio.size * target / source))
+    old_axis = np.linspace(0.0, 1.0, audio.size, endpoint=False)
+    new_axis = np.linspace(0.0, 1.0, count, endpoint=False)
+    return np.interp(new_axis, old_axis, audio).astype(np.float32)
+
+
 def default_input() -> int | None:
     """Re-read the Windows default input. PortAudio caches devices at init, so
     re-init first; it costs ~30 ms and makes headset swaps take effect."""
@@ -57,6 +86,16 @@ def default_input() -> int | None:
         sd._initialize()
     except Exception as exc:
         log("audio re-init failed: %s" % exc)
+    # Prefer WASAPI: MME truncates names to 31 characters and often reports a
+    # different default than the one Windows actually uses.
+    try:
+        for api in sd.query_hostapis():
+            if "WASAPI" in api["name"]:
+                index = api["default_input_device"]
+                if index is not None and int(index) >= 0:
+                    return int(index)
+    except Exception as exc:
+        log("WASAPI default lookup failed: %s" % exc)
     try:
         index = sd.default.device[0]
         if index is not None and int(index) >= 0:
@@ -103,6 +142,7 @@ class Indicator:
         self.queue.put((kind, text))
 
     def run(self) -> None:
+        import ctypes
         import tkinter as tk
 
         root = tk.Tk()
@@ -118,30 +158,78 @@ class Indicator:
             font=("Segoe UI", 11, "bold"),
             padx=16,
             pady=7,
+            wraplength=720,
+            justify="left",
         )
         label.pack()
-        width, height = 190, 42
+
+        # Never take focus from the app being dictated into. Tk's deiconify()
+        # force-activates even with WS_EX_NOACTIVATE, so visibility is driven at
+        # the Win32 level (ShowWindow) and Tk's map state is left alone.
+        user32 = ctypes.windll.user32
+        GWL_EXSTYLE = -20
+        WS_EX_NOACTIVATE = 0x08000000
+        WS_EX_TOOLWINDOW = 0x00000080
+        GA_ROOT = 2
+        SW_HIDE = 0
+        SW_SHOWNOACTIVATE = 4
+        user32.GetAncestor.restype = ctypes.c_void_p
+        hwnd = ctypes.c_void_p(user32.GetAncestor(root.winfo_id(), GA_ROOT))
+        style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongPtrW(
+            hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+
         screen_w = root.winfo_screenwidth()
         screen_h = root.winfo_screenheight()
-        root.geometry("%dx%d+%d+%d" % (width, height, (screen_w - width) // 2, screen_h - height - 96))
+        visible = {"on": False}
+
+        def place(offscreen: bool = False) -> None:
+            root.update_idletasks()
+            width = max(root.winfo_reqwidth(), 190)
+            height = root.winfo_reqheight()
+            if offscreen:
+                x, y = -32000, -32000
+            else:
+                x = (screen_w - width) // 2
+                y = screen_h - height - 96
+            root.geometry("%dx%d+%d+%d" % (width, height, x, y))
+
+        def show() -> None:
+            place()
+            if not visible["on"]:
+                user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+                visible["on"] = True
+
+        def hide() -> None:
+            if visible["on"]:
+                user32.ShowWindow(hwnd, SW_HIDE)
+                visible["on"] = False
+
+        # Burn Tk's one-time first-map activation off-screen, so the first real
+        # caption never steals focus mid-dictation.
+        place(offscreen=True)
         root.withdraw()
+        user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+        for _ in range(5):
+            root.update()
+        user32.ShowWindow(hwnd, SW_HIDE)
+        root.update()
 
         def poll() -> None:
             try:
                 while True:
                     kind, text = self.queue.get_nowait()
                     if kind == "hide":
-                        root.withdraw()
+                        hide()
                         self.hide_at = 0.0
                         continue
                     label.config(text=text, fg=self.COLORS.get(kind, "#ffffff"))
-                    root.deiconify()
-                    root.lift()
+                    show()
                     self.hide_at = 0.0 if kind in ("rec", "stt", "live") else time.time() + 1.3
             except Exception:
                 pass
             if self.hide_at and time.time() > self.hide_at:
-                root.withdraw()
+                hide()
                 self.hide_at = 0.0
             root.after(40, poll)
 
@@ -154,6 +242,7 @@ class Recorder:
 
     def __init__(self, rate: int, max_seconds: int) -> None:
         self.rate = rate
+        self.stream_rate = rate
         self.max_frames = int(rate * max_seconds)
         self._stream: sd.InputStream | None = None
         self._chunks: list[np.ndarray] = []
@@ -173,20 +262,30 @@ class Recorder:
         with self._lock:
             self._chunks = []
             self._frames = 0
+        native = self.rate
         try:
-            self._stream = sd.InputStream(
-                device=device,
-                channels=1,
-                samplerate=self.rate,
-                dtype="float32",
-                callback=self._callback,
-            )
-            self._stream.start()
-            return True
-        except Exception as exc:
-            log("could not open mic: %s" % exc)
-            self._stream = None
-            return False
+            native = int(sd.query_devices(device)["default_samplerate"])
+        except Exception:
+            pass
+        for rate in (self.rate, native):
+            try:
+                stream = sd.InputStream(
+                    device=device,
+                    channels=1,
+                    samplerate=rate,
+                    dtype="float32",
+                    callback=self._callback,
+                )
+                stream.start()
+                self._stream = stream
+                self.stream_rate = rate
+                if rate != self.rate:
+                    log("mic opened at %d Hz, resampling to %d" % (rate, self.rate))
+                return True
+            except Exception as exc:
+                log("could not open mic at %d Hz: %s" % (rate, exc))
+        self._stream = None
+        return False
 
     def stop(self) -> np.ndarray:
         stream, self._stream = self._stream, None
@@ -201,7 +300,7 @@ class Recorder:
             self._chunks = []
         if not chunks:
             return np.zeros(0, dtype=np.float32)
-        return np.concatenate(chunks).reshape(-1)
+        return _resample(np.concatenate(chunks).reshape(-1), self.stream_rate, self.rate)
 
 
 class LiveListener:
@@ -212,6 +311,7 @@ class LiveListener:
                  hangover: float = 0.7, min_speech: float = 0.35,
                  max_segment: float = 20.0, on_partial=None) -> None:
         self.rate = rate
+        self.stream_rate = rate
         self.on_segment = on_segment
         self.on_partial = on_partial
         self._partial_mark = 0
@@ -232,6 +332,8 @@ class LiveListener:
         if status:
             log("audio status: %s" % status)
         mono = indata[:, 0].copy()
+        if self.stream_rate != self.rate:
+            mono = _resample(mono, self.stream_rate, self.rate)
         rms = float(np.sqrt(np.mean(mono.astype(np.float64) ** 2)))
         with self._lock:
             self._buf.append(mono)
@@ -257,14 +359,26 @@ class LiveListener:
             self._queue.put(audio)
 
     def start(self, device: int | None) -> bool:
+        native = self.rate
         try:
-            self._stream = sd.InputStream(
-                device=device, channels=1, samplerate=self.rate,
-                dtype="float32", callback=self._callback,
-            )
-            self._stream.start()
-        except Exception as exc:
-            log("live: could not open mic: %s" % exc)
+            native = int(sd.query_devices(device)["default_samplerate"])
+        except Exception:
+            pass
+        for rate in (self.rate, native):
+            try:
+                stream = sd.InputStream(
+                    device=device, channels=1, samplerate=rate,
+                    dtype="float32", callback=self._callback,
+                )
+                stream.start()
+                self._stream = stream
+                self.stream_rate = rate
+                if rate != self.rate:
+                    log("live: mic opened at %d Hz, resampling to %d" % (rate, self.rate))
+                break
+            except Exception as exc:
+                log("live: could not open mic at %d Hz: %s" % (rate, exc))
+        else:
             self._stream = None
             return False
         self._running = True
@@ -561,6 +675,165 @@ def _trim_tokens(text: str, span: int) -> str:
     return " ".join(tokens[: len(tokens) - span])
 
 
+def _clipboard_get_text() -> str | None:
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.CloseClipboard.restype = wintypes.BOOL
+    user32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+    user32.IsClipboardFormatAvailable.restype = wintypes.BOOL
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.GetClipboardData.restype = wintypes.HANDLE
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = wintypes.LPVOID
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+
+    CF_UNICODETEXT = 13
+    if not user32.IsClipboardFormatAvailable(CF_UNICODETEXT):
+        return None
+    if not user32.OpenClipboard(None):
+        return None
+    try:
+        handle = user32.GetClipboardData(CF_UNICODETEXT)
+        if not handle:
+            return None
+        pointer = kernel32.GlobalLock(handle)
+        if not pointer:
+            return None
+        try:
+            return ctypes.wstring_at(pointer)
+        finally:
+            kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
+
+
+def _type_text(text: str) -> None:
+    """SendInput with KEYEVENTF_UNICODE: no clipboard, surrogate-pair aware."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    INPUT_KEYBOARD = 1
+    KEYEVENTF_KEYUP = 0x0002
+    KEYEVENTF_UNICODE = 0x0004
+    VK_RETURN = 0x0D
+    ULONG_PTR = ctypes.c_size_t
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", wintypes.WORD),
+            ("wScan", wintypes.WORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ULONG_PTR),
+        ]
+
+    class _Union(ctypes.Union):
+        _fields_ = [("ki", KEYBDINPUT), ("padding", ctypes.c_byte * 32)]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", wintypes.DWORD), ("union", _Union)]
+
+    def event(vk: int = 0, scan: int = 0, flags: int = 0):
+        item = INPUT()
+        item.type = INPUT_KEYBOARD
+        item.union.ki = KEYBDINPUT(vk, scan, flags, 0, 0)
+        return item
+
+    events = []
+    for char in text.replace("\r\n", "\n"):
+        if char == "\n":
+            events.append(event(vk=VK_RETURN))
+            events.append(event(vk=VK_RETURN, flags=KEYEVENTF_KEYUP))
+            continue
+        for byte_index in range(0, len(char.encode("utf-16-le")), 2):
+            unit = int.from_bytes(char.encode("utf-16-le")[byte_index:byte_index + 2], "little")
+            events.append(event(scan=unit, flags=KEYEVENTF_UNICODE))
+            events.append(event(scan=unit, flags=KEYEVENTF_UNICODE | KEYEVENTF_KEYUP))
+
+    batch = 32
+    for start in range(0, len(events), batch):
+        chunk = events[start:start + batch]
+        array = (INPUT * len(chunk))(*chunk)
+        sent = user32.SendInput(len(chunk), array, ctypes.sizeof(INPUT))
+        if sent != len(chunk):
+            raise OSError("SendInput injected %d/%d events (err %d)"
+                          % (sent, len(chunk), kernel32.GetLastError()))
+        time.sleep(0.005)
+
+
+def insert_text(text: str, indicator: "Indicator") -> None:
+    """Type by default; paste for long text (typing thousands of chars is slow)."""
+    mode = (_cfg.get("injection") or "auto").lower()
+    limit = int(_cfg.get("paste_threshold_chars", 200))
+    use_paste = mode == "paste" or (mode == "auto" and len(text) > limit)
+
+    _INJECTING.set()
+    try:
+        if use_paste:
+            import keyboard as kb
+
+            previous = _clipboard_get_text()
+            if not _set_clipboard(text):
+                raise OSError("could not set the clipboard")
+            kb.send("left ctrl+v")
+            time.sleep(0.08)
+            if previous is not None:
+                time.sleep(0.25)  # let the target read it before restoring
+                _set_clipboard(previous)
+        else:
+            _type_text(text)
+    finally:
+        _INJECTING.clear()
+
+
+def foreground_elevated() -> bool:
+    """True when the foreground process runs elevated (UIPI blocks our input)."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    advapi32.OpenProcessToken.restype = wintypes.BOOL
+    advapi32.GetTokenInformation.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return False
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    handle = kernel32.OpenProcess(0x1000, False, pid.value)  # QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    token = wintypes.HANDLE()
+    try:
+        if not advapi32.OpenProcessToken(handle, 0x0008, ctypes.byref(token)):  # TOKEN_QUERY
+            return False
+        elevation = wintypes.DWORD()
+        size = wintypes.DWORD()
+        ok = advapi32.GetTokenInformation(
+            token, 20, ctypes.byref(elevation), ctypes.sizeof(elevation), ctypes.byref(size))
+        return bool(ok and elevation.value)
+    finally:
+        if token:
+            kernel32.CloseHandle(token)
+        kernel32.CloseHandle(handle)
+
+
 def compose(text: str, action: str, indicator: "Indicator") -> None:
     """Type into the focused composer instead of submitting."""
     import keyboard as kb
@@ -570,6 +843,14 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
     if front != target:
         indicator.post("warn", "focus the chat box")
         log("compose skipped: foreground is %r, not %s" % (front or "unknown", target))
+        return
+
+    if foreground_elevated():
+        # UIPI: an elevated window ignores our synthetic input entirely.
+        indicator.post("warn", "app is elevated")
+        log("compose blocked: the foreground app runs elevated (UIPI)")
+        if text:
+            _set_clipboard(text)
         return
 
     if action == "send":
@@ -646,15 +927,7 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
             return
         if _compose_state["has_text"] and payload[:1] not in (" ", "\n"):
             payload = " " + payload
-        _INJECTING.set()
-        try:
-            if _set_clipboard(payload):
-                kb.send("left ctrl+v")
-                time.sleep(0.05)
-            else:
-                kb.write(payload)
-        finally:
-            _INJECTING.clear()
+        insert_text(payload, indicator)
         _compose_state["has_text"] = True
         mirror = _compose_state["text"].rstrip()
         _compose_state["text"] = (mirror + " " + payload.strip()) if mirror else payload.strip()
@@ -664,15 +937,7 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
 
     if action.startswith("punct:"):
         char = action.split(":", 1)[1]
-        _INJECTING.set()
-        try:
-            if _set_clipboard(char):
-                kb.send("left ctrl+v")
-                time.sleep(0.05)
-            else:
-                kb.write(char)
-        finally:
-            _INJECTING.clear()
+        insert_text(char, indicator)
         _compose_state["has_text"] = True
         _compose_state["text"] = _compose_state["text"].rstrip() + char
         indicator.post("done", "✓ %s" % char)
@@ -720,16 +985,7 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
         return
 
     if action == "new_paragraph":
-        payload = "\n\n"
-        _INJECTING.set()
-        try:
-            if _set_clipboard(payload):
-                kb.send("left ctrl+v")
-                time.sleep(0.05)
-            else:
-                kb.write(payload)
-        finally:
-            _INJECTING.clear()
+        insert_text("\n\n", indicator)
         _compose_state["text"] = _compose_state["text"].rstrip() + "\n\n"
         indicator.post("done", "¶")
         log("compose: new paragraph")
@@ -738,15 +994,7 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
     payload = "\n" if action == "newline" else _clean_spacing(text)
     if action == "add" and _compose_state["has_text"] and payload[:1] not in (" ", "\n"):
         payload = " " + payload
-    _INJECTING.set()
-    try:
-        if _set_clipboard(payload):
-            kb.send("left ctrl+v")
-            time.sleep(0.05)
-        else:
-            kb.write(payload)
-    finally:
-        _INJECTING.clear()
+    insert_text(payload, indicator)
     if action in ("add", "newline"):
         _compose_state["has_text"] = True
         mirror = _compose_state["text"].rstrip()
@@ -1152,6 +1400,25 @@ def beep(freq: int, ms: int) -> None:
     threading.Thread(target=play, daemon=True).start()
 
 
+def load_model() -> WhisperModel:
+    """CUDA when it works, CPU int8 otherwise."""
+    size = _cfg.get("model", "base")
+    mode = (_cfg.get("device") or "auto").lower()
+    attempts = []
+    if mode in ("auto", "cuda"):
+        attempts.append(("cuda", "int8_float16"))
+    if mode in ("auto", "cpu"):
+        attempts.append(("cpu", "int8"))
+    for device, compute in attempts:
+        try:
+            model = WhisperModel(size, device=device, compute_type=compute)
+            log("whisper %s loaded on %s (%s)" % (size, device, compute))
+            return model
+        except Exception as exc:
+            log("whisper on %s failed: %s" % (device, exc))
+    raise RuntimeError("whisper could not load on any device")
+
+
 def main() -> int:
     global _cfg
     _cfg = load_config()
@@ -1175,7 +1442,7 @@ def main() -> int:
 
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     load_phrases()
-    model = WhisperModel(_cfg.get("model", "base"), device="cpu", compute_type="int8")
+    model = load_model()
     log("whisper model loaded")
 
     device = pick_device(_cfg.get("mic_device"))

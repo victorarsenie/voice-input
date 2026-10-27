@@ -2,3 +2,8 @@ faster-whisper>=1.2
 sounddevice>=0.5
 keyboard>=0.13
 numpy>=1.26
+piper-tts>=1.8
+# CUDA runtime for ctranslate2 on Windows: without these it silently runs on CPU.
+# Skip them for a CPU-only install (set "device": "cpu" in voice.json).
+nvidia-cublas-cu12
+nvidia-cudnn-cu12

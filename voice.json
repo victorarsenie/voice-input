@@ -78,6 +78,9 @@
                        "kanban":  "kanban"
                    },
     "tts_voice":  "D:\\Hermes\\cache\\piper-voices\\en_US-amy-medium.onnx",
+    "device":  "auto",
+    "injection":  "auto",
+    "paste_threshold_chars":  200,
     "agent":  "assistant",
     "session_id":  null,
     "model_ref":  {

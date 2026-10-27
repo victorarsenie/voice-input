@@ -210,9 +210,11 @@ class LiveListener:
 
     def __init__(self, rate: int, on_segment, threshold: float = 0.006,
                  hangover: float = 0.7, min_speech: float = 0.35,
-                 max_segment: float = 20.0) -> None:
+                 max_segment: float = 20.0, on_partial=None) -> None:
         self.rate = rate
         self.on_segment = on_segment
+        self.on_partial = on_partial
+        self._partial_mark = 0
         self.threshold = threshold
         self.hangover = int(hangover * rate)
         self.min_speech = int(min_speech * rate)
@@ -250,6 +252,7 @@ class LiveListener:
         self._buf = []
         self._speech = 0
         self._silence = 0
+        self._partial_mark = 0
         if audio.size:
             self._queue.put(audio)
 
@@ -272,13 +275,32 @@ class LiveListener:
     def _work(self) -> None:
         while self._running or not self._queue.empty():
             try:
-                audio = self._queue.get(timeout=0.2)
+                audio = self._queue.get(timeout=0.3)
             except queue.Empty:
+                # Nothing to finalise: give a live caption on what is being said.
+                if self.on_partial is not None:
+                    snapshot = self._snapshot()
+                    if snapshot is not None:
+                        try:
+                            self.on_partial(snapshot)
+                        except Exception as exc:
+                            log("live caption error: %s" % exc)
                 continue
             try:
                 self.on_segment(audio)
             except Exception as exc:
                 log("live segment error: %s" % exc)
+
+    def _snapshot(self):
+        """Copy of the in-progress phrase, or None if there is nothing new."""
+        with self._lock:
+            if self._speech < self.min_speech or not self._buf:
+                return None
+            frames = sum(chunk.size for chunk in self._buf)
+            if frames - self._partial_mark < int(self.rate * 0.6):
+                return None
+            self._partial_mark = frames
+            return np.concatenate(self._buf).reshape(-1)
 
     def stop(self) -> None:
         self._running = False
@@ -311,8 +333,16 @@ def transcribe(model: WhisperModel, audio: np.ndarray, language: str) -> str:
         vad_filter=True,
         condition_on_previous_text=False,
     )
-    text = " ".join(seg.text.strip() for seg in segments).strip()
-    return text
+    # Whisper invents phrases on marginal audio (room noise, a fan, a keyboard).
+    # Its own no-speech probability is the cheapest reliable gate.
+    kept = []
+    for segment in segments:
+        no_speech = float(getattr(segment, "no_speech_prob", 0.0) or 0.0)
+        logprob = float(getattr(segment, "avg_logprob", 0.0) or 0.0)
+        if no_speech > 0.5 and logprob < -0.5:
+            continue
+        kept.append(segment.text.strip())
+    return " ".join(part for part in kept if part).strip()
 
 
 SERVICE_PATH = Path.home() / ".local" / "state" / "opencode" / "service.json"
@@ -601,6 +631,30 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
         log("compose: deleted last sentence (%d words, %d tokens)" % (count, span))
         return
 
+    if action.startswith("format:"):
+        style = action.split(":", 1)[1]
+        payload = format_words(text, style)
+        if not payload:
+            indicator.post("warn", "nothing to format")
+            return
+        if _compose_state["has_text"] and payload[:1] not in (" ", "\n"):
+            payload = " " + payload
+        _INJECTING.set()
+        try:
+            if _set_clipboard(payload):
+                kb.send("left ctrl+v")
+                time.sleep(0.05)
+            else:
+                kb.write(payload)
+        finally:
+            _INJECTING.clear()
+        _compose_state["has_text"] = True
+        mirror = _compose_state["text"].rstrip()
+        _compose_state["text"] = (mirror + " " + payload.strip()) if mirror else payload.strip()
+        indicator.post("done", "✓ %s" % style)
+        log("compose: formatted %s" % style)
+        return
+
     if action.startswith("punct:"):
         char = action.split(":", 1)[1]
         _INJECTING.set()
@@ -616,6 +670,62 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
         _compose_state["text"] = _compose_state["text"].rstrip() + char
         indicator.post("done", "✓ %s" % char)
         log("compose: inserted punctuation %r" % char)
+        return
+
+    if action in ("undo", "cancel"):
+        _INJECTING.set()
+        try:
+            kb.send("left ctrl+z")
+        finally:
+            _INJECTING.clear()
+        indicator.post("warn", "undone")
+        log("compose: %s (ctrl+z)" % action)
+        return
+
+    if action == "redo":
+        _INJECTING.set()
+        try:
+            kb.send("left ctrl+y")
+        finally:
+            _INJECTING.clear()
+        indicator.post("done", "redone")
+        log("compose: redo (ctrl+y)")
+        return
+
+    if action == "copy":
+        _INJECTING.set()
+        try:
+            kb.send("left ctrl+c")
+        finally:
+            _INJECTING.clear()
+        indicator.post("done", "copied")
+        log("compose: copy (ctrl+c)")
+        return
+
+    if action == "paste":
+        _INJECTING.set()
+        try:
+            kb.send("left ctrl+v")
+        finally:
+            _INJECTING.clear()
+        indicator.post("done", "pasted")
+        log("compose: paste (ctrl+v)")
+        return
+
+    if action == "new_paragraph":
+        payload = "\n\n"
+        _INJECTING.set()
+        try:
+            if _set_clipboard(payload):
+                kb.send("left ctrl+v")
+                time.sleep(0.05)
+            else:
+                kb.write(payload)
+        finally:
+            _INJECTING.clear()
+        _compose_state["text"] = _compose_state["text"].rstrip() + "\n\n"
+        indicator.post("done", "¶")
+        log("compose: new paragraph")
         return
 
     payload = "\n" if action == "newline" else _clean_spacing(text)
@@ -636,6 +746,58 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
         _compose_state["text"] = (mirror + " " + payload.strip()) if mirror else payload.strip()
     indicator.post("done", "✓ added")
     log("compose: added %d chars" % len(payload))
+
+
+def apply_dictionary(text: str) -> str:
+    """Fix the nouns whisper reliably mishears (deterministic, no model)."""
+    table = _cfg.get("dictionary") or {}
+    if not table:
+        return text
+    for spoken in sorted(table, key=len, reverse=True):
+        replacement = table[spoken]
+        pattern = r"(?<!\w)" + re.escape(spoken) + r"(?!\w)"
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+
+
+FORMAT_STYLES = {
+    "snake": "snake",
+    "kebab": "kebab",
+    "camel": "camel",
+    "title": "title",
+    "upper": "upper",
+    "lower": "lower",
+}
+
+
+def format_words(text: str, style: str) -> str:
+    words = [word for word in re.split(r"[^A-Za-z0-9]+", text) if word]
+    if not words:
+        return ""
+    if style == "snake":
+        return "_".join(word.lower() for word in words)
+    if style == "kebab":
+        return "-".join(word.lower() for word in words)
+    if style == "camel":
+        return words[0].lower() + "".join(word.capitalize() for word in words[1:])
+    if style == "title":
+        return " ".join(word.capitalize() for word in words)
+    if style == "upper":
+        return " ".join(word.upper() for word in words)
+    if style == "lower":
+        return " ".join(word.lower() for word in words)
+    return " ".join(words)
+
+
+def parse_format(text: str) -> tuple[str, str] | None:
+    """`snake case hello world` -> ('format:snake', 'hello world')."""
+    match = re.match(r"^\s*(snake|kebab|camel|title|upper|lower)\s+case\s+(.+)$", text, re.IGNORECASE)
+    if not match:
+        return None
+    style = match.group(1).lower()
+    if style not in FORMAT_STYLES:
+        return None
+    return ("format:" + style, match.group(2).strip())
 
 
 def classify(text: str) -> str | None:
@@ -769,10 +931,14 @@ def plan_transcript(text: str) -> list[tuple[str, str]]:
 
     for sentence in split_sentences(text):
         edit = parse_edit(sentence)
-        action = None if edit else classify(sentence)
+        fmt = None if edit else parse_format(sentence)
+        action = None if (edit or fmt) else classify(sentence)
         if edit:
             flush()
             steps.append(edit)
+        elif fmt:
+            flush()
+            steps.append(fmt)
         elif action:
             flush()
             if not steps or steps[-1][0] != action:
@@ -797,6 +963,95 @@ def plan_transcript(text: str) -> list[tuple[str, str]]:
     return steps
 
 
+def _part_text(parts) -> str:
+    chunks = []
+    for part in parts or []:
+        if isinstance(part, dict) and part.get("type") == "text" and part.get("text"):
+            chunks.append(part["text"])
+    return "\n".join(chunks).strip()
+
+
+def last_reply_text() -> str:
+    """Newest assistant message that actually contains text."""
+    session_id = resolve_session()
+    data = api("GET", "/api/session/%s/message?limit=20" % session_id) or {}
+    for message in data.get("data", []):
+        if message.get("type") == "assistant":
+            text = _part_text(message.get("content"))
+            if text:
+                return text
+    return ""
+
+
+def sanitise_for_speech(text: str, limit: int = 700) -> str:
+    """Strip what should not be read aloud: code, paths, urls, markup."""
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = re.sub(r"`[^`]*`", " ", text)
+    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"[A-Za-z]:\\[^\s]+", " ", text)
+    text = re.sub(r"^\s{0,3}#{1,6}\s*", "", text, flags=re.M)
+    text = re.sub(r"^\s*\|.*\|\s*$", " ", text, flags=re.M)
+    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.M)
+    text = re.sub(r"[*_~]{1,3}", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > limit:
+        cut = text[:limit]
+        stop = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+        text = cut[: stop + 1] if stop > 200 else cut
+    return text
+
+
+def speak_text(text: str, indicator: "Indicator") -> None:
+    """Local Piper, then play it. Runs in a thread so recording stays responsive."""
+    path = _cfg.get("tts_voice")
+    if not path or not Path(path).exists():
+        indicator.post("warn", "no tts voice")
+        log("tts: voice file missing: %r" % path)
+        return
+    if not text:
+        indicator.post("warn", "nothing to say")
+        return
+
+    def run() -> None:
+        import tempfile
+        import wave
+
+        try:
+            from piper import PiperVoice
+
+            voice = PiperVoice.load(path)
+            wav_path = Path(tempfile.gettempdir()) / "opencode-voice-tts.wav"
+            # piper >= 1.8 yields AudioChunk objects; older builds write a wav.
+            chunks = list(voice.synthesize(text))
+            if not chunks:
+                raise RuntimeError("piper returned no audio")
+            with wave.open(str(wav_path), "wb") as handle:
+                handle.setnchannels(chunks[0].sample_channels)
+                handle.setsampwidth(chunks[0].sample_width)
+                handle.setframerate(chunks[0].sample_rate)
+                for chunk in chunks:
+                    handle.writeframes(chunk.audio_int16_bytes)
+            import winsound
+
+            winsound.PlaySound(str(wav_path), winsound.SND_FILENAME)
+        except Exception as exc:
+            log("tts failed: %s" % exc)
+
+    indicator.post("done", "♪ speaking")
+    threading.Thread(target=run, daemon=True).start()
+    log("tts: speaking %d chars" % len(text))
+
+
+def speak_last_reply(indicator: "Indicator") -> None:
+    try:
+        raw = last_reply_text()
+    except Exception as exc:
+        indicator.post("warn", "no reply")
+        log("tts: could not read the reply: %s" % exc)
+        return
+    speak_text(sanitise_for_speech(raw), indicator)
+
+
 def deliver(text: str, mode: str, indicator: "Indicator") -> None:
     """Route a transcript: submit it, or type it into the focused composer."""
     if (mode or "submit").lower() == "compose":
@@ -804,6 +1059,9 @@ def deliver(text: str, mode: str, indicator: "Indicator") -> None:
         if not steps:
             return
         for action, payload in steps:
+            if action == "speak":
+                speak_last_reply(indicator)
+                continue
             compose(payload, action, indicator)
         if all(action == "add" for action, _ in steps):
             indicator.post("done", "✓ added")
@@ -913,6 +1171,7 @@ def main() -> int:
         started = time.perf_counter()
         text = transcribe(model, audio, _cfg.get("language", "en"))
         took = time.perf_counter() - started
+        text = apply_dictionary(text)
         if not text:
             indicator.post("warn", "nothing heard")
             log("%s: empty transcript (%.2fs clip, %.2fs stt)" % (source, seconds, took))
@@ -930,11 +1189,23 @@ def main() -> int:
         if state["live"]:
             indicator.post("live", "● live — right shift to stop")
 
+    def on_partial(audio: np.ndarray) -> None:
+        if not state["live"]:
+            return
+        try:
+            partial = transcribe(model, audio, _cfg.get("language", "en"))
+        except Exception as exc:
+            log("live caption failed: %s" % exc)
+            return
+        if partial:
+            indicator.post("stt", "… " + partial[-48:])
+
     live = LiveListener(
         rate,
         on_segment,
         threshold=float(_cfg.get("vad_threshold", 0.006)),
         hangover=float(_cfg.get("vad_hangover", 0.7)),
+        on_partial=on_partial if _cfg.get("live_caption", True) else None,
     )
 
     def toggle_live() -> None:
@@ -952,7 +1223,7 @@ def main() -> int:
         if live.start(device):
             state["live"] = True
             _compose_state["has_text"] = True  # assume the box may already hold text
-            indicator.post("live", "● live — right shift to stop")
+            indicator.post("live", "● live — scroll lock to stop")
             beep(880, 40)
             log("live: listening on %s" % sd.query_devices(device)["name"])
 
@@ -973,8 +1244,15 @@ def main() -> int:
             if not state["held"]:
                 return
             state["held"] = False
+            cancelled = state.pop("cancel", False)
             state["busy"] = True
         audio = recorder.stop()
+        if cancelled:
+            indicator.post("warn", "cancelled")
+            log("hold: cancelled, clip discarded (%.2fs)" % (audio.size / rate))
+            with guard:
+                state["busy"] = False
+            return
         indicator.post("stt", "… transcribing")
         beep(600, 30)
         try:
@@ -993,6 +1271,16 @@ def main() -> int:
             return  # our own keystrokes must never re-trigger the listener
         name = (event.name or "").lower()
         down = event.event_type == "down"
+
+        if name in ("esc", "escape"):
+            if down:
+                if state["held"]:
+                    state["cancel"] = True
+                    indicator.post("warn", "cancelling")
+                    log("hold: cancel requested")
+                elif state["live"]:
+                    toggle_live()
+            return
 
         if name == hold_key:
             if state["live"]:

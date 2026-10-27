@@ -37,8 +37,9 @@ No TTS, no wake word.
 
 | key | behaviour |
 |---|---|
-| hold **right ctrl** | records while held, transcribes on release, posts the prompt (mode `submit`) |
-| tap **right shift** | toggles live dictation: mic stays open, each phrase is typed into the focused composer; tap again to stop (mode `toggle_mode`, default `compose`) |
+| hold **right ctrl** | records while held, transcribes on release, posts the prompt (mode `submit`). **Esc cancels** and discards the clip |
+| tap **scroll lock** | toggles live dictation: mic stays open, each phrase is typed into the focused composer, partial words caption as you speak, tap again to stop (mode `toggle_mode`, default `compose`). The key's own LED shows the state |
+| tap **Esc** in live | stops live dictation |
 
 Live dictation segments on pauses (`vad_threshold`, `vad_hangover`), so you can
 speak at length and watch it appear, then say `send prompt` when you want it sent.
@@ -62,6 +63,34 @@ Spoken commands in compose mode (exact phrase, after light punctuation stripping
 | `comma`, `add comma`, `punctuation comma` | insert `,` hard against the previous word |
 | `period` / `full stop`, `semicolon`, `colon`, `question mark`, `exclamation mark`, `dash` / `hyphen`, `open bracket`, `close bracket`, `apostrophe`, `quote` | insert that character |
 | `new line` | insert a newline |
+| `new paragraph` | insert a blank line |
+| `undo that`, `redo that` | Ctrl+Z / Ctrl+Y |
+| `copy that`, `paste that` | Ctrl+C / Ctrl+V |
+| `cancel that`, `never mind` | Ctrl+Z (undo the last insert) |
+| `speak that`, `say that`, `read that` | read the last assistant reply aloud with Piper |
+| `snake case <words>`, `kebab case <words>`, `camel case <words>`, `title case <words>`, `upper case <words>`, `lower case <words>` | insert the words in that style (`snake case hello world` → `hello_world`) |
+
+### Dictionary
+
+Whisper mishears product and project nouns constantly. `dictionary` in
+`voice.json` is a deterministic replacement table applied to the transcript
+before commands are parsed — no model, no cost:
+
+```json
+"dictionary": { "open code": "OpenCode", "you torrent": "uTorrent" }
+```
+
+Longest phrase first, whole words, case-insensitive. Seeded with OpenCode,
+uTorrent, Strata, Muther, DeepSeek, Yeti Nano, Hermes, faster-whisper,
+llama.cpp.
+
+### Reading replies aloud
+
+`speak that` synthesises the newest assistant reply with **Piper** (local ONNX
+TTS, CPU) using `tts_voice` — the `en_US-amy-medium` voice already on this box
+from Hermes. Code blocks, paths, URLs and markup are stripped first, and long
+replies are cut at a sentence boundary around 700 characters. It is only used by
+that command; nothing is spoken automatically.
 
 `delete`/`remove`/`undo`/`cut` all work as the verb. Word and sentence commands
 must be the whole utterance; `remove one filter` is treated as prose.

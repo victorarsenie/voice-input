@@ -1,7 +1,7 @@
 {
     "key":  "right ctrl",
     "hold_key":  "right ctrl",
-    "toggle_key":  "right shift",
+    "toggle_key":  "scroll lock",
     "toggle_mode":  "compose",
     "vad_threshold":  0.006,
     "vad_hangover":  0.7,
@@ -31,9 +31,53 @@
                                        ],
                              "newline":  [
                                              "new line"
-                                         ]
+                                         ],
+                             "new_paragraph":  [
+                                                   "new paragraph"
+                                               ],
+                             "undo":  [
+                                          "undo that",
+                                          "undo"
+                                      ],
+                             "redo":  [
+                                          "redo that",
+                                          "redo"
+                                      ],
+                             "copy":  [
+                                          "copy that",
+                                          "copy"
+                                      ],
+                             "paste":  [
+                                           "paste that",
+                                           "paste"
+                                       ],
+                             "cancel":  [
+                                            "cancel that",
+                                            "never mind"
+                                        ],
+                             "speak":  [
+                                           "speak that",
+                                           "say that",
+                                           "read that"
+                                       ]
                          },
     "punctuation_commands":  {},
+    "dictionary":  {
+                       "open code":  "OpenCode",
+                       "open coded":  "OpenCode",
+                       "you torrent":  "uTorrent",
+                       "utorrent":  "uTorrent",
+                       "strata coder":  "Strata Coder",
+                       "strata":  "Strata",
+                       "mut her":  "Muther",
+                       "deep seek":  "DeepSeek",
+                       "yeti nano":  "Yeti Nano",
+                       "hermes":  "Hermes",
+                       "faster whisper":  "faster-whisper",
+                       "llama cpp":  "llama.cpp",
+                       "kanban":  "kanban"
+                   },
+    "tts_voice":  "D:\\Hermes\\cache\\piper-voices\\en_US-amy-medium.onnx",
     "agent":  "assistant",
     "session_id":  null,
     "model_ref":  {

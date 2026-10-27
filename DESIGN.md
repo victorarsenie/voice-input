@@ -1,6 +1,17 @@
 # Voice for OpenCode + local models — design
 
-Status: design only, nothing built.
+Status: **input half built and in use (2026-10-27)**. Spoken replies are still
+design. Live code is `E:\AI\voice` (`voice.py`, `voice.json`, `voice-ctl.ps1`);
+the implementation note is `knowledge/projects/voice-input/project.md` in the
+memory repo.
+
+Built so far: local faster-whisper `base` int8 on CPU, hold **right ctrl** to
+record and submit, tap **right shift** for live dictation that types each
+pause-delimited phrase into the composer, and spoken commands (`send prompt`,
+`delete prompt`, `remove the last N words`, `remove the last sentence`,
+`new line`). Not built: Piper TTS, sentence chunking, wake word, interrupt,
+spoken approval.
+
 Goal: hold a key, talk, get a spoken answer from the same local model stack used in
 the terminal, offline, with no cloud keys.
 

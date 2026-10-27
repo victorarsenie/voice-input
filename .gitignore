@@ -1,0 +1,14 @@
+# local environment
+.venv/
+__pycache__/
+*.pyc
+
+# runtime state
+logs/
+*.log
+
+# editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini

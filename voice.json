@@ -1,0 +1,43 @@
+{
+    "key":  "right ctrl",
+    "hold_key":  "right ctrl",
+    "toggle_key":  "right shift",
+    "toggle_mode":  "compose",
+    "vad_threshold":  0.006,
+    "vad_hangover":  0.7,
+    "model":  "base",
+    "language":  "en",
+    "mic_device":  "Yeti Nano",
+    "silence_peak":  0.002,
+    "beep":  true,
+    "sample_rate":  16000,
+    "max_seconds":  60,
+    "min_seconds":  0.35,
+    "session_title":  "voice",
+    "target":  "active",
+    "mode":  "submit",
+    "compose_target":  "OpenCode.exe",
+    "compose_commands":  {
+                             "send":  [
+                                          "send prompt",
+                                          "send it",
+                                          "send"
+                                      ],
+                             "clear":  [
+                                           "delete prompt",
+                                           "clear prompt",
+                                           "scratch that",
+                                           "delete it"
+                                       ],
+                             "newline":  [
+                                             "new line"
+                                         ]
+                         },
+    "agent":  "assistant",
+    "session_id":  null,
+    "model_ref":  {
+                      "providerID":  "opencode",
+                      "id":  "deepseek-v4.1-flash-free"
+                  },
+    "opencode":  "C:\\Users\\victo\\AppData\\Roaming\\npm\\node_modules\\@opencode\\cli\\bin\\opencode.exe"
+}

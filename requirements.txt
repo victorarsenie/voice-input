@@ -1,0 +1,4 @@
+faster-whisper>=1.2
+sounddevice>=0.5
+keyboard>=0.13
+numpy>=1.26

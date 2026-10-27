@@ -482,6 +482,34 @@ def scroll_lock_on() -> bool:
     return bool(ctypes.windll.user32.GetKeyState(0x91) & 1)
 
 
+_model = None
+_model_lock = threading.Lock()
+_model_last_used = 0.0
+
+
+def ensure_model() -> WhisperModel:
+    """Load on demand and remember when it was last needed."""
+    global _model, _model_last_used
+    with _model_lock:
+        if _model is None:
+            _model = load_model()
+        _model_last_used = time.time()
+        return _model
+
+
+def release_model(reason: str) -> None:
+    """Free the CUDA context and weights so a local LLM can have the VRAM."""
+    global _model
+    with _model_lock:
+        if _model is None:
+            return
+        _model = None
+    import gc
+
+    gc.collect()
+    log("model released (%s)" % reason)
+
+
 def transcribe(model: WhisperModel, audio: np.ndarray, language: str) -> str:
     segments, info = model.transcribe(
         audio,
@@ -1253,8 +1281,7 @@ def main() -> int:
 
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     load_phrases()
-    model = load_model()
-    log("whisper model loaded")
+    ensure_model()  # warm it now; idle unload releases it again later
 
     device = pick_device(_cfg.get("mic_device"))
     log("mic: %s (follows the default input)" % sd.query_devices(device)["name"])
@@ -1284,7 +1311,7 @@ def main() -> int:
             return
         seconds = audio.size / rate
         started = time.perf_counter()
-        text = transcribe(model, audio, _cfg.get("language", "en"))
+        text = transcribe(ensure_model(), audio, _cfg.get("language", "en"))
         took = time.perf_counter() - started
         text = apply_dictionary(text)
         if not text:
@@ -1308,7 +1335,7 @@ def main() -> int:
         if not state["live"]:
             return
         try:
-            partial = transcribe(model, audio, _cfg.get("language", "en"))
+            partial = transcribe(ensure_model(), audio, _cfg.get("language", "en"))
         except Exception as exc:
             log("live caption failed: %s" % exc)
             return
@@ -1433,6 +1460,19 @@ def main() -> int:
     # Adopt the key's current state at startup, so a lit LED resumes dictation
     # instead of silently disagreeing with the pill.
     threading.Thread(target=sync_live, daemon=True).start()
+
+    idle_minutes = float(_cfg.get("idle_unload_minutes", 5))
+
+    def idle_watch() -> None:
+        """Give the VRAM back to local LLMs when dictation has been idle."""
+        while True:
+            time.sleep(30)
+            if idle_minutes > 0 and _model is not None and (
+                time.time() - _model_last_used > idle_minutes * 60
+            ):
+                release_model("idle %.0f min" % idle_minutes)
+
+    threading.Thread(target=idle_watch, daemon=True).start()
 
     # Tk owns the main thread; the hook needs its own thread to stay pumped.
     threading.Thread(target=keyboard.wait, daemon=True).start()

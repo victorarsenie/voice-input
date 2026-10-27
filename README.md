@@ -113,6 +113,25 @@ Extra punctuation phrases can be added under `punctuation_commands` in
 
 Anything else is pasted in, so you can accumulate a long prompt by voice.
 
+## GPU or CPU
+
+Measured on this box (RTX 5070 Ti, 16 GB), 6 s clip:
+
+| setting | VRAM added | decode | note |
+|---|---|---|---|
+| `"device": "cpu"` (default) | **0 MiB** | 1.14 s | `small.en` int8, leaves the whole card to local LLMs |
+| `"device": "cuda"`, `base` | +289 MiB | 0.05 s | CUDA context dominates |
+| `"device": "cuda"`, `small.en` | +480 MiB | 0.06 s | context ~250 MiB, weights the rest |
+| `int8` instead of `int8_float16` on CUDA | no saving | same | the context is the cost, not the weights |
+
+`idle_unload_minutes` (default 5) drops the model after inactivity, but in-process
+that recovers only part of the CUDA footprint (measured 1404 → 1116 MiB, not
+1404 → 930): the CUDA context and cuDNN handles live until the process exits. A
+full reclaim would need whisper in a short-lived subprocess, which is not built.
+
+Switching to CUDA also needs the `nvidia-cublas-cu12` / `nvidia-cudnn-cu12`
+wheels (~1.9 GB on disk, listed in requirements.txt).
+
 ## Feedback while you talk
 
 A borderless, always-on-top pill appears above the taskbar the moment the key

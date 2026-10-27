@@ -4,7 +4,7 @@ Hold the key, speak, release. The clip is transcribed locally with
 faster-whisper and the text is submitted as a prompt to a dedicated OpenCode
 session, so it runs in the same conversation tree the app shows.
 
-Design and landmines: E:\\AI\\muther\\docs\\VOICE.md ("Voice for OpenCode").
+Design and landmines: DESIGN.md in this repo.
 No cloud, no keys, nothing runs between key-down and key-up except the recorder.
 """
 

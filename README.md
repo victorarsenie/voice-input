@@ -3,7 +3,8 @@
 Hold `F9`, speak, release. The clip is transcribed locally and submitted as a
 prompt to the OpenCode session titled `voice`, with the `assistant` agent.
 
-Design: `E:\AI\muther\docs\VOICE.md` (voice for OpenCode + local models).
+Design: `DESIGN.md` in this repo (moved here from Muther on 2026-10-27;
+`E:\AI\muther\docs\VOICE.md` is now a pointer to this project).
 This folder implements only the input half: hotkey → record → STT → submit.
 No TTS, no wake word.
 

@@ -99,5 +99,6 @@
                          "wt.exe",
                          "mintty.exe"
                      ],
-    "idle_unload_minutes":  5
+    "idle_unload_minutes":  5,
+    "submit_target":  "OpenCode.exe"
 }

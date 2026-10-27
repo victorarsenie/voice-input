@@ -1173,6 +1173,15 @@ def deliver(text: str, mode: str, indicator: "Indicator") -> None:
     if not steps:
         return
 
+    # Destination follows focus: inside OpenCode the hold key submits to the
+    # active session; anywhere else it types into whatever has the cursor.
+    target = (_cfg.get("submit_target") or "OpenCode.exe").lower()
+    focused = _foreground_exe().lower()
+    mode = (mode or "submit").lower()
+    if mode != "compose" and focused != target:
+        log("submit redirected: %r is focused, typing instead" % (focused or "unknown"))
+        mode = "compose"
+
     for action, _ in steps:
         if action == "speak":
             speak_last_reply(indicator)
@@ -1180,7 +1189,7 @@ def deliver(text: str, mode: str, indicator: "Indicator") -> None:
     if not steps:
         return
 
-    if (mode or "submit").lower() == "compose":
+    if mode == "compose":
         for action, payload in steps:
             compose(payload, action, indicator)
         if all(action == "add" for action, _ in steps):

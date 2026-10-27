@@ -37,7 +37,7 @@ No TTS, no wake word.
 
 | key | behaviour |
 |---|---|
-| hold **right ctrl** | records while held, transcribes on release, posts the prompt (mode `submit`). **Esc cancels** and discards the clip |
+| hold **right ctrl** | records while held. If **OpenCode** is focused, submits the prompt to the active session; anywhere else it types into the focused textbox instead (`submit_target` controls which app counts as the session app). **Esc cancels** and discards the clip |
 | tap **scroll lock** | toggles live dictation: mic stays open, each phrase is typed into the focused composer, partial words caption as you speak, tap again to stop (mode `toggle_mode`, default `compose`). The key's LED shows the state |
 
 Scroll Lock is the **source of truth**: the listener reads its state rather than

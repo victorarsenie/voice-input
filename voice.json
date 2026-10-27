@@ -16,7 +16,7 @@
     "session_title":  "voice",
     "target":  "active",
     "mode":  "submit",
-    "compose_target":  "OpenCode.exe",
+    "compose_target":  "*",
     "compose_commands":  {
                              "send":  [
                                           "send prompt",
@@ -89,5 +89,14 @@
                       "providerID":  "opencode",
                       "id":  "deepseek-v4.1-flash-free"
                   },
-    "opencode":  "C:\\Users\\victo\\AppData\\Roaming\\npm\\node_modules\\@opencode\\cli\\bin\\opencode.exe"
+    "opencode":  "C:\\Users\\victo\\AppData\\Roaming\\npm\\node_modules\\@opencode\\cli\\bin\\opencode.exe",
+    "compose_deny":  [
+                         "cmd.exe",
+                         "powershell.exe",
+                         "pwsh.exe",
+                         "windowsterminal.exe",
+                         "conhost.exe",
+                         "wt.exe",
+                         "mintty.exe"
+                     ]
 }

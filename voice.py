@@ -173,7 +173,17 @@ class Indicator:
         GA_ROOT = 2
         SW_HIDE = 0
         SW_SHOWNOACTIVATE = 4
+        LONG_PTR = ctypes.c_ssize_t
+        # Without explicit prototypes ctypes truncates LONG_PTR to int and the
+        # style write corrupts the window instead of adding the flags.
         user32.GetAncestor.restype = ctypes.c_void_p
+        user32.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        user32.GetWindowLongPtrW.restype = LONG_PTR
+        user32.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        user32.SetWindowLongPtrW.restype = LONG_PTR
+        user32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, LONG_PTR]
+        user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        user32.ShowWindow.restype = ctypes.c_bool
         hwnd = ctypes.c_void_p(user32.GetAncestor(root.winfo_id(), GA_ROOT))
         style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
         user32.SetWindowLongPtrW(
@@ -197,23 +207,21 @@ class Indicator:
         def show() -> None:
             place()
             if not visible["on"]:
-                user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+                root.deiconify()
+                root.lift()
                 visible["on"] = True
 
         def hide() -> None:
             if visible["on"]:
-                user32.ShowWindow(hwnd, SW_HIDE)
+                root.withdraw()
                 visible["on"] = False
 
-        # Burn Tk's one-time first-map activation off-screen, so the first real
-        # caption never steals focus mid-dictation.
-        place(offscreen=True)
-        root.withdraw()
-        user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
-        for _ in range(5):
-            root.update()
-        user32.ShowWindow(hwnd, SW_HIDE)
+        # Map it once, then apply NOACTIVATE while it is a real, mapped window.
         root.update()
+        root.withdraw()
+        style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongPtrW(
+            hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
 
         def poll() -> None:
             try:

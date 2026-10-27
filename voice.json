@@ -100,5 +100,6 @@
                          "mintty.exe"
                      ],
     "idle_unload_minutes":  5,
-    "submit_target":  "OpenCode.exe"
+    "submit_target":  "OpenCode.exe",
+    "tray":  true
 }

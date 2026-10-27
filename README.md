@@ -12,11 +12,21 @@ No TTS, no wake word.
 
 | file | purpose |
 |---|---|
-| `voice.py` | coordinator: hotkey, recorder, whisper, submit |
-| `voice.json` | key, model, mic, session, agent, CLI path |
-| `start-voice.vbs` | starts the listener hidden |
-| `logs/voice.log` | every clip, transcript and submit |
-| `.venv/` | faster-whisper, sounddevice, keyboard, numpy |
+| `voice.py` | app: hotkeys, state, routing, submit/compose, TTS |
+| `voicekit/commands.py` | spoken grammar: dictionary, phrases, edits, formatters, planning |
+| `voicekit/inject.py` | SendInput typing, clipboard fallback, focus and UIPI checks |
+| `voicekit/overlay.py` | status pill (Tk, never takes focus) and tray icon |
+| `voicekit/audio.py` | recorder, live VAD segmentation, device/rate choice |
+| `voicekit/stt.py` | whisper: CUDA DLLs, on-demand model, transcription |
+| `voicekit/config.py` | paths, config loader, shared log |
+| `voice.json` | keys, modes, mic, model, session target, spoken phrases |
+| `voice-ctl.ps1` | `start` / `stop` / `restart` / `toggle` / `status` / `log` / `mode` |
+| `install-shortcuts.ps1` | one `Voice` shortcut on the desktop and Start menu |
+| `start-voice.vbs` | hidden launch (pythonw), used by `voice-ctl start` |
+| `logs/voice.log` | every clip, transcript, decision and submit |
+| `.venv/` | faster-whisper, sounddevice, keyboard, numpy, piper, pystray |
+| `tests/test_parser.py` | grammar checks, no audio or Windows API needed |
+| `tests/injection_manual.py` | click-to-focus SendInput round trip |
 
 ## Config
 
@@ -151,7 +161,9 @@ there is no installer and no console window.
 
 A borderless, always-on-top pill appears above the taskbar the moment the key
 goes down, and never takes focus (`overrideredirect` + topmost, the foreground
-window is unchanged — measured):
+window is unchanged — measured). A tray icon mirrors the same state (grey idle,
+red recording/live, amber transcribing, green delivered) and its menu toggles
+live dictation, opens the log, or quits. Set `"tray": false` to skip it.
 
 | state | pill |
 |---|---|

@@ -38,7 +38,12 @@ No TTS, no wake word.
 | key | behaviour |
 |---|---|
 | hold **right ctrl** | records while held, transcribes on release, posts the prompt (mode `submit`). **Esc cancels** and discards the clip |
-| tap **scroll lock** | toggles live dictation: mic stays open, each phrase is typed into the focused composer, partial words caption as you speak, tap again to stop (mode `toggle_mode`, default `compose`). The key's own LED shows the state |
+| tap **scroll lock** | toggles live dictation: mic stays open, each phrase is typed into the focused composer, partial words caption as you speak, tap again to stop (mode `toggle_mode`, default `compose`). The key's LED shows the state |
+
+Scroll Lock is the **source of truth**: the listener reads its state rather than
+flipping an internal flag, so the LED and the pill can never disagree. That also
+means a restart while the LED is lit resumes dictation instead of dropping it,
+and Esc no longer stops live (the key owns that).
 | tap **Esc** in live | stops live dictation |
 
 Live dictation segments on pauses (`vad_threshold`, `vad_hangover`), so you can

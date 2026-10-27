@@ -325,6 +325,13 @@ class LiveListener:
             self._worker = None
 
 
+def scroll_lock_on() -> bool:
+    """The key's own toggle state, which the keyboard LED shows."""
+    import ctypes
+
+    return bool(ctypes.windll.user32.GetKeyState(0x91) & 1)
+
+
 def transcribe(model: WhisperModel, audio: np.ndarray, language: str) -> str:
     segments, info = model.transcribe(
         audio,
@@ -572,7 +579,7 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
         finally:
             _INJECTING.clear()
         _compose_state["has_text"] = False
-        indicator.post("done", "âœ“ sent")
+        indicator.post("done", "✓ sent")
         log("compose: sent")
         return
 
@@ -651,7 +658,7 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
         _compose_state["has_text"] = True
         mirror = _compose_state["text"].rstrip()
         _compose_state["text"] = (mirror + " " + payload.strip()) if mirror else payload.strip()
-        indicator.post("done", "âœ“ %s" % style)
+        indicator.post("done", "✓ %s" % style)
         log("compose: formatted %s" % style)
         return
 
@@ -668,7 +675,7 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
             _INJECTING.clear()
         _compose_state["has_text"] = True
         _compose_state["text"] = _compose_state["text"].rstrip() + char
-        indicator.post("done", "âœ“ %s" % char)
+        indicator.post("done", "✓ %s" % char)
         log("compose: inserted punctuation %r" % char)
         return
 
@@ -724,7 +731,7 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
         finally:
             _INJECTING.clear()
         _compose_state["text"] = _compose_state["text"].rstrip() + "\n\n"
-        indicator.post("done", "Â¶")
+        indicator.post("done", "¶")
         log("compose: new paragraph")
         return
 
@@ -744,7 +751,7 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
         _compose_state["has_text"] = True
         mirror = _compose_state["text"].rstrip()
         _compose_state["text"] = (mirror + " " + payload.strip()) if mirror else payload.strip()
-    indicator.post("done", "âœ“ added")
+    indicator.post("done", "✓ added")
     log("compose: added %d chars" % len(payload))
 
 
@@ -1058,7 +1065,7 @@ def speak_text(text: str, indicator: "Indicator") -> None:
         except Exception as exc:
             log("tts failed: %s" % exc)
 
-    indicator.post("done", "â™ª speaking")
+    indicator.post("done", "♪ speaking")
     threading.Thread(target=run, daemon=True).start()
     log("tts: speaking %d chars" % len(text))
 
@@ -1090,14 +1097,14 @@ def deliver(text: str, mode: str, indicator: "Indicator") -> None:
         for action, payload in steps:
             compose(payload, action, indicator)
         if all(action == "add" for action, _ in steps):
-            indicator.post("done", "âœ“ added")
+            indicator.post("done", "✓ added")
         return
 
     spoken = " ".join(payload for action, payload in steps if action == "add").strip()
     if not spoken:
         return
     submit(spoken, resolve_session())
-    indicator.post("done", "âœ“ sent")
+    indicator.post("done", "✓ sent")
 
 
 def submit(text: str, session_id: str) -> None:
@@ -1210,14 +1217,14 @@ def main() -> int:
         deliver(text, mode, indicator)
 
     def on_segment(audio: np.ndarray) -> None:
-        indicator.post("stt", "â€¦ transcribing")
+        indicator.post("stt", "… transcribing")
         try:
             handle_audio(audio, toggle_mode, "live")
         except Exception as exc:
             indicator.post("warn", "error")
             log("live error: %s" % exc)
         if state["live"]:
-            indicator.post("live", "â— live â€” %s to stop" % toggle_key)
+            indicator.post("live", "● live — %s to stop" % toggle_key)
 
     def on_partial(audio: np.ndarray) -> None:
         if not state["live"]:
@@ -1228,7 +1235,7 @@ def main() -> int:
             log("live caption failed: %s" % exc)
             return
         if partial:
-            indicator.post("stt", "â€¦ " + partial[-48:])
+            indicator.post("stt", "… " + partial[-48:])
 
     live = LiveListener(
         rate,
@@ -1238,13 +1245,17 @@ def main() -> int:
         on_partial=on_partial if _cfg.get("live_caption", True) else None,
     )
 
-    def toggle_live() -> None:
+    def stop_live() -> None:
+        if not state["live"]:
+            return
+        state["live"] = False
+        live.stop()
+        indicator.post("hide", "")
+        beep(600, 30)
+        log("live: stopped")
+
+    def start_live() -> None:
         if state["live"]:
-            state["live"] = False
-            live.stop()
-            indicator.post("hide", "")
-            beep(600, 30)
-            log("live: stopped")
             return
         if state["busy"] or state["held"]:
             indicator.post("warn", "busy")
@@ -1253,9 +1264,21 @@ def main() -> int:
         if live.start(device):
             state["live"] = True
             _compose_state["has_text"] = True  # assume the box may already hold text
-            indicator.post("live", "â— live â€” %s to stop" % toggle_key)
+            indicator.post("live", "● live — %s to stop" % toggle_key)
             beep(880, 40)
             log("live: listening on %s" % sd.query_devices(device)["name"])
+
+    def sync_live() -> None:
+        """Match the key's own state, so the LED can never disagree with us."""
+        if scroll_lock_on():
+            start_live()
+        else:
+            stop_live()
+
+    def toggle_live() -> None:
+        # The key has already flipped its own state; match it rather than guess,
+        # and read it slightly later so the OS has applied the toggle.
+        threading.Timer(0.08, sync_live).start()
 
     def on_press(event) -> None:
         with guard:
@@ -1265,7 +1288,7 @@ def main() -> int:
         device = pick_device(_cfg.get("mic_device"))
         state["device"] = sd.query_devices(device)["name"]
         if recorder.start(device):
-            indicator.post("rec", "â— recording")
+            indicator.post("rec", "● recording")
             beep(880, 40)
             log("recording on %s" % state["device"])
 
@@ -1283,7 +1306,7 @@ def main() -> int:
             with guard:
                 state["busy"] = False
             return
-        indicator.post("stt", "â€¦ transcribing")
+        indicator.post("stt", "… transcribing")
         beep(600, 30)
         try:
             handle_audio(audio, hold_mode, "hold")
@@ -1303,13 +1326,10 @@ def main() -> int:
         down = event.event_type == "down"
 
         if name in ("esc", "escape"):
-            if down:
-                if state["held"]:
-                    state["cancel"] = True
-                    indicator.post("warn", "cancelling")
-                    log("hold: cancel requested")
-                elif state["live"]:
-                    toggle_live()
+            if down and state["held"]:
+                state["cancel"] = True
+                indicator.post("warn", "cancelling")
+                log("hold: cancel requested")
             return
 
         if name == hold_key:
@@ -1331,6 +1351,10 @@ def main() -> int:
     keyboard.hook(handle)
     indicator.post("hide", "")
     log("ready: hold %s (%s) | tap %s (%s)" % (hold_key, hold_mode, toggle_key, toggle_mode))
+
+    # Adopt the key's current state at startup, so a lit LED resumes dictation
+    # instead of silently disagreeing with the pill.
+    threading.Thread(target=sync_live, daemon=True).start()
 
     # Tk owns the main thread; the hook needs its own thread to stay pumped.
     threading.Thread(target=keyboard.wait, daemon=True).start()

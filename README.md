@@ -132,6 +132,20 @@ full reclaim would need whisper in a short-lived subprocess, which is not built.
 Switching to CUDA also needs the `nvidia-cublas-cu12` / `nvidia-cudnn-cu12`
 wheels (~1.9 GB on disk, listed in requirements.txt).
 
+## Start it like an app
+
+`install-shortcuts.ps1` creates three shortcuts (run it once):
+
+| shortcut | what it does |
+|---|---|
+| **Voice dictation** (Desktop + Start Menu) | starts the listener hidden; safe to double-click twice — a second copy exits on the single-instance mutex |
+| **Voice toggle** (Desktop) | starts it if stopped, stops it if running |
+
+The icon is currently Python's; drop your own `.ico` in the folder and point
+`IconLocation` at it if you want a mic glyph. There is no `.exe`: it is a Python
+program started through `wscript.exe` + `start-voice.vbs`, which is why it has no
+console window and needs no installer.
+
 ## Feedback while you talk
 
 A borderless, always-on-top pill appears above the taskbar the moment the key

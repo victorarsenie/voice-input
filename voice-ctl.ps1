@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('start', 'stop', 'restart', 'status', 'log', 'mode')]
+    [ValidateSet('start', 'stop', 'restart', 'toggle', 'status', 'log', 'mode')]
     [string]$Action = 'status',
     [string]$Mode
 )
@@ -48,6 +48,10 @@ switch ($Action) {
     'start' { "voice: " + (Start-Listener) }
     'stop' { if (Stop-Listener) { 'voice: stopped' } else { 'voice: already stopped' } }
     'restart' { $null = Stop-Listener; Start-Sleep -Milliseconds 500; "voice: " + (Start-Listener) }
+    'toggle' {
+        if (Get-Listener) { $null = Stop-Listener; 'voice: stopped' }
+        else { "voice: " + (Start-Listener) }
+    }
     'status' { Show-Status }
     'log' { if (Test-Path $logPath) { Get-Content $logPath -Tail 20 } else { 'no log yet' } }
     'mode' {

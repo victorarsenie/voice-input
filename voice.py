@@ -491,11 +491,37 @@ def _last_sentence_words(text: str) -> int:
     return len(parts[-1].split()) if parts else 0
 
 
-def _trim_words(text: str, count: int) -> str:
-    words = text.rstrip().split()
-    if count >= len(words):
+def _clean_spacing(text: str) -> str:
+    """Whisper sometimes emits "word ." - pull punctuation back onto the word."""
+    text = re.sub(r"\s+([,.;:!?%)\]}])", r"\1", text)
+    text = re.sub(r"([(\[{])\s+", r"\1", text)
+    return re.sub(r"[ \t]{2,}", " ", text).strip()
+
+
+def _is_word(token: str) -> bool:
+    return any(ch.isalnum() for ch in token)
+
+
+def _tokens_for_words(text: str, words: int) -> int:
+    """How many whitespace tokens the last `words` words plus trailing punctuation span."""
+    if words <= 0:
+        return 0
+    span = 0
+    seen = 0
+    for token in reversed(text.rstrip().split()):
+        span += 1
+        if _is_word(token):
+            seen += 1
+            if seen >= words:
+                break
+    return span if seen else 0
+
+
+def _trim_tokens(text: str, span: int) -> str:
+    tokens = text.rstrip().split()
+    if span >= len(tokens):
         return ""
-    return " ".join(words[: len(words) - count])
+    return " ".join(tokens[: len(tokens) - span])
 
 
 def compose(text: str, action: str, indicator: "Indicator") -> None:
@@ -535,17 +561,20 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
 
     if action == "delete_words":
         count = int(text or 0)
+        mirror = _compose_state["text"].rstrip()
+        # Count tokens, not words: a stray "." sitting on its own must go too.
+        span = _tokens_for_words(mirror, count) if mirror else count
         _INJECTING.set()
         try:
-            for _ in range(max(count, 0)):
+            for _ in range(max(span, 0)):
                 kb.send("left ctrl+left shift+left")
                 time.sleep(0.02)
             kb.send("backspace")
         finally:
             _INJECTING.clear()
-        _compose_state["text"] = _trim_words(_compose_state["text"], count)
+        _compose_state["text"] = _trim_tokens(mirror, span)
         indicator.post("warn", "deleted %d" % count)
-        log("compose: deleted last %d word(s)" % count)
+        log("compose: deleted last %d word(s) (%d tokens)" % (count, span))
         return
 
     if action == "delete_sentence":
@@ -558,20 +587,38 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
             log("compose: delete sentence ignored (no tracked text)")
             return
         count = _last_sentence_words(mirror)
+        span = _tokens_for_words(mirror, count)
         _INJECTING.set()
         try:
-            for _ in range(count):
+            for _ in range(span):
                 kb.send("left ctrl+left shift+left")
                 time.sleep(0.02)
             kb.send("backspace")
         finally:
             _INJECTING.clear()
-        _compose_state["text"] = " ".join(parts[:-1])
+        _compose_state["text"] = _trim_tokens(mirror, span)
         indicator.post("warn", "deleted sentence")
-        log("compose: deleted last sentence (%d words)" % count)
+        log("compose: deleted last sentence (%d words, %d tokens)" % (count, span))
         return
 
-    payload = "\n" if action == "newline" else text
+    if action.startswith("punct:"):
+        char = action.split(":", 1)[1]
+        _INJECTING.set()
+        try:
+            if _set_clipboard(char):
+                kb.send("left ctrl+v")
+                time.sleep(0.05)
+            else:
+                kb.write(char)
+        finally:
+            _INJECTING.clear()
+        _compose_state["has_text"] = True
+        _compose_state["text"] = _compose_state["text"].rstrip() + char
+        indicator.post("done", "✓ %s" % char)
+        log("compose: inserted punctuation %r" % char)
+        return
+
+    payload = "\n" if action == "newline" else _clean_spacing(text)
     if action == "add" and _compose_state["has_text"] and payload[:1] not in (" ", "\n"):
         payload = " " + payload
     _INJECTING.set()
@@ -585,20 +632,15 @@ def compose(text: str, action: str, indicator: "Indicator") -> None:
         _INJECTING.clear()
     if action in ("add", "newline"):
         _compose_state["has_text"] = True
-        _compose_state["text"] = (_compose_state["text"] + payload).rstrip() + " "
+        mirror = _compose_state["text"].rstrip()
+        _compose_state["text"] = (mirror + " " + payload.strip()) if mirror else payload.strip()
     indicator.post("done", "✓ added")
     log("compose: added %d chars" % len(payload))
 
 
 def classify(text: str) -> str | None:
-    """Map a spoken phrase to a composer command, if it is one."""
-    normalised = " ".join(text.lower().replace(".", " ").replace(",", " ").split())
-    table = _cfg.get("compose_commands") or {}
-    for action, phrases in table.items():
-        for phrase in phrases:
-            if normalised == phrase.strip().lower():
-                return action
-    return None
+    """Map a spoken phrase to a command action, if the whole phrase is one."""
+    return _PHRASES.get(_normalise(text))
 
 
 def split_sentences(text: str) -> list[str]:
@@ -620,15 +662,39 @@ _EDIT_LAST_SENTENCE = re.compile(_EDIT_VERBS + r"\s+(?:the\s+)?last\s+sentence")
 _PHRASES: dict[str, str] = {}
 
 
+DEFAULT_PUNCTUATION = {
+    ",": ["comma", "add comma", "punctuation comma"],
+    ".": ["period", "full stop", "add period", "punctuation period"],
+    ";": ["semicolon", "add semicolon", "punctuation semicolon"],
+    ":": ["colon", "add colon", "punctuation colon"],
+    "?": ["question mark", "add question mark"],
+    "!": ["exclamation mark", "exclamation point", "add exclamation mark"],
+    "-": ["dash", "hyphen", "add dash"],
+    "(": ["open bracket", "open parenthesis"],
+    ")": ["close bracket", "close parenthesis"],
+    "'": ["apostrophe", "single quote"],
+    '"': ["quote", "double quote"],
+}
+
+
 def load_phrases() -> None:
-    """Flatten compose_commands into phrase -> action, longest phrase first."""
+    """Flatten compose_commands and punctuation into phrase -> action, longest first."""
     _PHRASES.clear()
     table = _cfg.get("compose_commands") or {}
     for action, phrases in table.items():
         for phrase in phrases:
-            normalised = " ".join(re.sub(r"[^a-z0-9 ]+", " ", phrase.lower()).split())
+            normalised = _normalise(phrase)
             if normalised:
                 _PHRASES[normalised] = action
+
+    punctuation = dict(DEFAULT_PUNCTUATION)
+    for char, phrases in (_cfg.get("punctuation_commands") or {}).items():
+        punctuation[char] = phrases
+    for char, phrases in punctuation.items():
+        for phrase in phrases:
+            normalised = _normalise(phrase)
+            if normalised:
+                _PHRASES.setdefault(normalised, "punct:" + char)
 
 
 def _normalise(text: str) -> str:

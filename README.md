@@ -59,12 +59,23 @@ Spoken commands in compose mode (exact phrase, after light punctuation stripping
 | `delete prompt`, `clear prompt`, `scratch that`, `delete it` | Ctrl+A then Delete |
 | `remove the last word`, `remove one word`, `remove one`, `delete two`, `delete the last 5 words` | select that many words back, delete (number optional, defaults to 1) |
 | `remove the last sentence`, `delete the last sentence` | delete the last sentence |
+| `comma`, `add comma`, `punctuation comma` | insert `,` hard against the previous word |
+| `period` / `full stop`, `semicolon`, `colon`, `question mark`, `exclamation mark`, `dash` / `hyphen`, `open bracket`, `close bracket`, `apostrophe`, `quote` | insert that character |
 | `new line` | insert a newline |
 
 `delete`/`remove`/`undo`/`cut` all work as the verb. Word and sentence commands
 must be the whole utterance; `remove one filter` is treated as prose.
 Sentence deletion counts the words of the last sentence in the text this tool
 typed itself, so manual edits in the box can make it miss.
+
+Deletion counts **words, not tokens**: a full stop or comma sitting on its own
+after a word is removed with that word, never on its own. Inserted text also has
+stray spaces before punctuation stripped (`Hello there .` → `Hello there.`), and
+punctuation commands attach to the preceding word without a space, so
+`hello` → `comma` → `world` gives `hello, world`.
+
+Extra punctuation phrases can be added under `punctuation_commands` in
+`voice.json`, keyed by the character: `{"–": ["en dash"]}`.
 
 Anything else is pasted in, so you can accumulate a long prompt by voice.
 

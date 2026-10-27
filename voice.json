@@ -33,6 +33,7 @@
                                              "new line"
                                          ]
                          },
+    "punctuation_commands":  {},
     "agent":  "assistant",
     "session_id":  null,
     "model_ref":  {

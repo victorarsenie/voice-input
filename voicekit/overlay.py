@@ -137,6 +137,24 @@ class Indicator:
             log("overlay failed, continuing headless: %s" % exc)
         finally:
             self.failed = True
+def icon_image(color: str, size: int = 64):
+    """The mic glyph used by the tray and by the shortcut icon."""
+    from PIL import Image, ImageDraw
+
+    scale = size / 64.0
+
+    def box(x0, y0, x1, y1):
+        return (x0 * scale, y0 * scale, x1 * scale, y1 * scale)
+
+    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse(box(2, 2, 62, 62), fill=color)
+    draw.rounded_rectangle(box(26, 14, 38, 36), radius=max(2, int(6 * scale)), fill="#141414")
+    draw.arc(box(20, 22, 44, 44), start=0, end=180, fill="#141414", width=max(1, int(3 * scale)))
+    draw.line(box(32, 44, 32, 52), fill="#141414", width=max(1, int(3 * scale)))
+    return image
+
+
 class Tray:
     """System-tray icon: shows state, click toggles live dictation."""
 
@@ -164,17 +182,7 @@ class Tray:
 
     @staticmethod
     def _image(color: str):
-        from PIL import Image, ImageDraw
-
-        size = 64
-        image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
-        draw.ellipse((4, 4, size - 4, size - 4), fill=color)
-        # A simple mic glyph: rounded capsule plus stand.
-        draw.rounded_rectangle((26, 14, 38, 36), radius=6, fill="#141414")
-        draw.arc((20, 22, 44, 44), start=0, end=180, fill="#141414", width=3)
-        draw.line((32, 44, 32, 52), fill="#141414", width=3)
-        return image
+        return icon_image(color, 64)
 
     def start(self) -> bool:
         try:

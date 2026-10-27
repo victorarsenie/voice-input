@@ -7,6 +7,8 @@ if (-not (Test-Path $pythonw)) { throw "pythonw not found: $pythonw" }
 if (-not (Test-Path $ctl)) { throw "control script not found: $ctl" }
 
 $powershell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$icon = Join-Path $root 'assets\voice.ico'
+if (-not (Test-Path $icon)) { throw "icon not found: $icon (run make-icon.py)" }
 $desktop = [Environment]::GetFolderPath('Desktop')
 $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 $shell = New-Object -ComObject WScript.Shell
@@ -30,7 +32,7 @@ foreach ($folder in @($desktop, $startMenu)) {
     $shortcut.TargetPath = $powershell
     $shortcut.Arguments = $arguments
     $shortcut.WorkingDirectory = $root
-    $shortcut.IconLocation = "$pythonw,0"
+    $shortcut.IconLocation = "$icon,0"
     $shortcut.Description = 'Local voice dictation: double-click to start, again to stop'
     $shortcut.Save()
     "created: $path"

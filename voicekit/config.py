@@ -12,6 +12,10 @@ LOG_PATH = LOG_DIR / "voice.log"
 CFG: dict = {}
 _log_lock = threading.Lock()
 
+# Set while text-to-speech is playing, so the microphone never transcribes the
+# voice it just produced. Audio modules drop frames while this is set.
+SPEAKING = threading.Event()
+
 
 def configure(cfg: dict) -> None:
     """Point every module at the live config dict (same object, so updates show)."""

@@ -6,7 +6,7 @@ import time
 import numpy as np
 import sounddevice as sd
 
-from .config import log
+from .config import SPEAKING, log
 
 
 def _resample(audio: np.ndarray, source: int, target: int) -> np.ndarray:
@@ -72,6 +72,8 @@ class Recorder:
     def _callback(self, indata, frames, time_info, status) -> None:
         if status:
             log("audio status: %s" % status)
+        if SPEAKING.is_set():
+            return  # never record our own speech
         with self._lock:
             if self._frames >= self.max_frames:
                 return
@@ -149,6 +151,13 @@ class LiveListener:
     def _callback(self, indata, frames, time_info, status) -> None:
         if status:
             log("audio status: %s" % status)
+        if SPEAKING.is_set():
+            # Drop frames (and any half-captured phrase) while the reply is read.
+            with self._lock:
+                self._buf = []
+                self._speech = 0
+                self._silence = 0
+            return
         mono = indata[:, 0].copy()
         if self.stream_rate != self.rate:
             mono = _resample(mono, self.stream_rate, self.rate)

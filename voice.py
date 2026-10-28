@@ -26,7 +26,7 @@ import keyboard
 
 
 from voicekit import commands, config
-from voicekit.config import CFG, LOG_DIR, LOG_PATH, load_config as _load_config_file, log
+from voicekit.config import CFG, LOG_DIR, LOG_PATH, SPEAKING, load_config as _load_config_file, log
 from voicekit.audio import LiveListener, Recorder, pick_device
 from voicekit.inject import (
     INJECTING,
@@ -514,6 +514,9 @@ def speak_text(text: str, indicator: "Indicator") -> None:
         import tempfile
         import wave
 
+        # Mute from the moment synthesis starts, so nothing said while the voice
+        # is being prepared is transcribed either.
+        SPEAKING.set()
         try:
             from piper import PiperVoice
 
@@ -534,6 +537,9 @@ def speak_text(text: str, indicator: "Indicator") -> None:
             winsound.PlaySound(str(wav_path), winsound.SND_FILENAME)
         except Exception as exc:
             log("tts failed: %s" % exc)
+        finally:
+            time.sleep(0.3)  # let the room settle before listening again
+            SPEAKING.clear()
 
     indicator.post("done", "♪ speaking")
     threading.Thread(target=run, daemon=True).start()
@@ -789,6 +795,16 @@ def main() -> int:
             if state["held"] or state["busy"]:
                 return
             state["held"] = True
+        # Speaking? Holding the key interrupts the reply so you can talk over it.
+        if SPEAKING.is_set():
+            try:
+                import winsound
+
+                winsound.PlaySound(None, winsound.SND_PURGE)
+            except Exception:
+                pass
+            SPEAKING.clear()
+            log("hold: playback interrupted by the key")
         device = pick_device(_cfg.get("mic_device"))
         state["device"] = sd.query_devices(device)["name"]
         if recorder.start(device):

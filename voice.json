@@ -58,7 +58,11 @@
                              "speak":  [
                                            "speak that",
                                            "say that",
-                                           "read that"
+                                           "read that",
+                                           "read the answer",
+                                           "read answer",
+                                           "speak the answer",
+                                           "read the reply"
                                        ],
                              "speak_full":  [
                                                 "read it all",

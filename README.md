@@ -82,7 +82,8 @@ Spoken commands in compose mode (exact phrase, after light punctuation stripping
 | `undo that`, `redo that` | Ctrl+Z / Ctrl+Y |
 | `copy that`, `paste that` | Ctrl+C / Ctrl+V |
 | `cancel that`, `never mind` | Ctrl+Z (undo the last insert) |
-| `speak that`, `say that`, `read that` | read the last assistant reply aloud with Piper |
+| `speak that`, `say that`, `read that`, `read the answer` / `read answer`, `speak the answer`, `read the reply` | speak a short summary of the last assistant reply |
+| `read it all`, `speak it all`, `read the whole thing` | read the whole reply instead of the summary |
 | `snake case <words>`, `kebab case <words>`, `camel case <words>`, `title case <words>`, `upper case <words>`, `lower case <words>` | insert the words in that style (`snake case hello world` → `hello_world`) |
 
 ### Dictionary

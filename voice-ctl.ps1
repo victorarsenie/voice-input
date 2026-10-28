@@ -23,14 +23,19 @@ function Stop-Listener {
 
 function Start-Listener {
     if (Get-Listener) { return 'already running' }
+    $before = if (Test-Path $logPath) { (Get-Item $logPath).LastWriteTime } else { [datetime]::MinValue }
     Start-Process wscript.exe -ArgumentList (Join-Path $root 'start-voice.vbs')
 
-    $deadline = (Get-Date).AddSeconds(20)
+    $deadline = (Get-Date).AddSeconds(25)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 300
         if ((Get-Listener) -and (Test-Path $logPath)) {
-            $tail = Get-Content $logPath -Tail 3 -ErrorAction SilentlyContinue
-            if ($tail -match 'ready: hold') { return 'started' }
+            $item = Get-Item $logPath
+            # Only trust a 'ready' line written after this start, not a stale one.
+            if ($item.LastWriteTime -gt $before) {
+                $tail = Get-Content $logPath -Tail 3 -ErrorAction SilentlyContinue
+                if ($tail -match 'ready: hold') { return 'started' }
+            }
         }
     }
     return 'started but no ready line yet (check the log)'
@@ -54,7 +59,7 @@ switch ($Action) {
         $stamp = Join-Path $root 'logs\.toggle-stamp'
         if (Test-Path $stamp) {
             $age = (Get-Date) - (Get-Item $stamp).LastWriteTime
-            if ($age.TotalSeconds -lt 5) {
+            if ($age.TotalSeconds -lt 1.5) {
                 "voice: toggle ignored (another toggle {0:N1}s ago)" -f $age.TotalSeconds
                 return
             }

@@ -26,7 +26,7 @@ import keyboard
 
 
 from voicekit import commands, config
-from voicekit.config import CFG, LOG_PATH, load_config as _load_config_file, log
+from voicekit.config import CFG, LOG_DIR, LOG_PATH, load_config as _load_config_file, log
 from voicekit.audio import LiveListener, Recorder, pick_device
 from voicekit.inject import (
     INJECTING,
@@ -444,8 +444,8 @@ def last_reply_text() -> str:
     return ""
 
 
-def sanitise_for_speech(text: str, limit: int = 700) -> str:
-    """Strip what should not be read aloud: code, paths, urls, markup."""
+def _strip_for_speech(text: str) -> str:
+    """Remove what should never be read aloud: code, paths, urls, markup."""
     text = re.sub(r"```.*?```", " ", text, flags=re.S)
     text = re.sub(r"`[^`]*`", " ", text)
     text = re.sub(r"https?://\S+", " ", text)
@@ -454,12 +454,49 @@ def sanitise_for_speech(text: str, limit: int = 700) -> str:
     text = re.sub(r"^\s*\|.*\|\s*$", " ", text, flags=re.M)
     text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.M)
     text = re.sub(r"[*_~]{1,3}", "", text)
-    text = re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def sanitise_for_speech(text: str, limit: int = 700) -> str:
+    """Strip markup, then cut at a sentence boundary near `limit`."""
+    text = _strip_for_speech(text)
     if len(text) > limit:
         cut = text[:limit]
         stop = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
         text = cut[: stop + 1] if stop > 200 else cut
     return text
+
+
+def summarise_for_speech(text: str) -> str:
+    """Short spoken summary: the opening sentences, ending on a full stop.
+
+    Deliberately extractive - no model call, so nothing can invent or reword.
+    """
+    clean = _strip_for_speech(text)
+    sentences = re.split(r"(?<=[.!?])\s+", clean)
+    wanted = int(_cfg.get("tts_summary_sentences", 3))
+    limit = int(_cfg.get("tts_summary_chars", 320))
+
+    parts: list[str] = []
+    for sentence in sentences:
+        if not sentence.strip():
+            continue
+        if len(" ".join(parts + [sentence])) > limit:
+            break
+        parts.append(sentence.strip())
+        if len(parts) >= wanted:
+            break
+    summary = " ".join(parts).strip()
+    return summary or sanitise_for_speech(text, limit)
+
+
+def save_full_answer(text: str) -> Path:
+    """Keep the full reply on disk so the summary has somewhere to point."""
+    folder = Path(LOG_DIR) / "answers"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / (time.strftime("%Y-%m-%d_%H%M%S") + ".md")
+    path.write_text(text, encoding="utf-8")
+    return path
 
 
 def speak_text(text: str, indicator: "Indicator") -> None:
@@ -503,14 +540,37 @@ def speak_text(text: str, indicator: "Indicator") -> None:
     log("tts: speaking %d chars" % len(text))
 
 
-def speak_last_reply(indicator: "Indicator") -> None:
+def speak_last_reply(indicator: "Indicator", full: bool = False) -> None:
+    """Speak a short summary by default; keep the whole reply on disk + clipboard."""
     try:
         raw = last_reply_text()
     except Exception as exc:
         indicator.post("warn", "no reply")
         log("tts: could not read the reply: %s" % exc)
         return
-    speak_text(sanitise_for_speech(raw), indicator)
+    if not raw.strip():
+        indicator.post("warn", "nothing to say")
+        return
+
+    mode = "full" if full else (_cfg.get("tts_mode") or "summary").lower()
+    if mode == "full":
+        spoken = sanitise_for_speech(raw, limit=int(_cfg.get("tts_max_chars", 700)))
+    else:
+        spoken = summarise_for_speech(raw)
+
+    # The full text stays reachable: written to logs/answers and put on the
+    # clipboard, so the spoken summary never hides detail.
+    try:
+        path = save_full_answer(raw)
+        if _set_clipboard(raw):
+            log("tts: full reply copied to clipboard, saved to %s" % path)
+        else:
+            log("tts: full reply saved to %s (clipboard failed)" % path)
+    except Exception as exc:
+        log("tts: could not store the full reply: %s" % exc)
+
+    log("tts: speaking %s (%d chars of %d)" % (mode, len(spoken), len(raw)))
+    speak_text(spoken, indicator)
 
 
 def deliver(text: str, mode: str, indicator: "Indicator") -> None:
@@ -530,8 +590,10 @@ def deliver(text: str, mode: str, indicator: "Indicator") -> None:
 
     for action, _ in steps:
         if action == "speak":
-            speak_last_reply(indicator)
-    steps = [step for step in steps if step[0] != "speak"]
+            speak_last_reply(indicator, full=False)
+        elif action == "speak_full":
+            speak_last_reply(indicator, full=True)
+    steps = [step for step in steps if step[0] not in ("speak", "speak_full")]
     if not steps:
         return
 

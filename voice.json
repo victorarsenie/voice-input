@@ -59,7 +59,12 @@
                                            "speak that",
                                            "say that",
                                            "read that"
-                                       ]
+                                       ],
+                             "speak_full":  [
+                                                "read it all",
+                                                "speak it all",
+                                                "read the whole thing"
+                                            ]
                          },
     "punctuation_commands":  {
 
@@ -101,5 +106,9 @@
                      ],
     "idle_unload_minutes":  5,
     "submit_target":  "OpenCode.exe",
-    "tray":  true
+    "tray":  true,
+    "tts_mode":  "summary",
+    "tts_summary_sentences":  3,
+    "tts_summary_chars":  320,
+    "tts_max_chars":  700
 }

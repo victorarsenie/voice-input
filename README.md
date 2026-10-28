@@ -101,11 +101,19 @@ llama.cpp.
 
 ### Reading replies aloud
 
-`speak that` synthesises the newest assistant reply with **Piper** (local ONNX
-TTS, CPU) using `tts_voice` — the `en_US-amy-medium` voice already on this box
-from Hermes. Code blocks, paths, URLs and markup are stripped first, and long
-replies are cut at a sentence boundary around 700 characters. It is only used by
-that command; nothing is spoken automatically.
+`speak that` says a **short summary**; `read it all` / `speak it all` reads the full
+text. The summary is extractive — the opening `tts_summary_sentences` (3) up to
+`tts_summary_chars` (320) — so no model is involved and nothing can be invented
+or reworded.
+
+The **full reply is never lost**: it is copied to the clipboard and written to
+`logs/answers/<timestamp>.md` every time you ask for speech, so the spoken
+summary is an index into text you still have. `tts_mode: "full"` makes the default
+command read everything instead (capped by `tts_max_chars`, 700).
+
+Piper does the synthesis (local ONNX TTS, CPU) with `tts_voice` — the
+`en_US-amy-medium` voice already on this box from Hermes. Code blocks, paths,
+URLs and markup are stripped before speaking.
 
 `delete`/`remove`/`undo`/`cut` all work as the verb. Word and sentence commands
 must be the whole utterance; `remove one filter` is treated as prose.

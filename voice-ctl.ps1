@@ -49,6 +49,17 @@ switch ($Action) {
     'stop' { if (Stop-Listener) { 'voice: stopped' } else { 'voice: already stopped' } }
     'restart' { $null = Stop-Listener; Start-Sleep -Milliseconds 500; "voice: " + (Start-Listener) }
     'toggle' {
+        # A toggle takes a few seconds to start the listener; a second click while
+        # that is in flight would stop it again. Ignore rapid repeats.
+        $stamp = Join-Path $root 'logs\.toggle-stamp'
+        if (Test-Path $stamp) {
+            $age = (Get-Date) - (Get-Item $stamp).LastWriteTime
+            if ($age.TotalSeconds -lt 5) {
+                "voice: toggle ignored (another toggle {0:N1}s ago)" -f $age.TotalSeconds
+                return
+            }
+        }
+        New-Item -ItemType File -Path $stamp -Force | Out-Null
         if (Get-Listener) { $null = Stop-Listener; 'voice: stopped' }
         else { "voice: " + (Start-Listener) }
     }
